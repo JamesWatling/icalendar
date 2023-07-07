@@ -1,5 +1,5 @@
 module Icalendar
 
-  VERSION = '2.5.3'
+  VERSION = '2.8.0'
 
 end

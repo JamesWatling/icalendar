@@ -4,9 +4,24 @@ module Icalendar
 
   class Parser
     attr_writer :component_class
-    attr_reader :source, :strict, :timezone_store
+    attr_reader :source, :strict, :timezone_store, :verbose
 
-    def initialize(source, strict = false)
+    def self.clean_bad_wrapping(source)
+      content = if source.respond_to? :read
+        source.read
+      elsif source.respond_to? :to_s
+        source.to_s
+      else
+        msg = 'Icalendar::Parser.clean_bad_wrapping must be called with a String or IO object'
+        Icalendar.fatal msg
+        fail ArgumentError, msg
+      end
+      encoding = content.encoding
+      content.force_encoding(Encoding::ASCII_8BIT)
+      content.gsub(/\r?\n[ \t]/, "").force_encoding(encoding)
+    end
+
+    def initialize(source, strict = false, verbose = false)
       if source.respond_to? :gets
         @source = source
       elsif source.respond_to? :to_s
@@ -18,6 +33,7 @@ module Icalendar
       end
       read_in_data
       @strict = strict
+      @verbose = verbose
       @timezone_store = TimezoneStore.new
     end
 
@@ -34,7 +50,7 @@ module Icalendar
 
     def parse_property(component, fields = nil)
       fields = next_fields if fields.nil?
-      prop_name = %w(class method).include?(fields[:name]) ? "ip_#{fields[:name]}" : fields[:name]
+      prop_name = %w(class method name).include?(fields[:name]) ? "ip_#{fields[:name]}" : fields[:name]
       multi_property = component.class.multiple_properties.include? prop_name
       prop_value = wrap_property_value component, fields, multi_property
       begin
@@ -49,7 +65,7 @@ module Icalendar
           Icalendar.logger.error "No method \"#{method_name}\" for component #{component}"
           raise nme
         else
-          Icalendar.logger.warn "No method \"#{method_name}\" for component #{component}. Appending to custom."
+          Icalendar.logger.warn "No method \"#{method_name}\" for component #{component}. Appending to custom." if verbose?
           component.append_custom_property prop_name, prop_value
         end
       end
@@ -82,8 +98,8 @@ module Icalendar
       if !fields[:params]['value'].nil?
         klass_name = fields[:params].delete('value').first
         unless klass_name.upcase == klass.value_type
-          klass_name = klass_name.downcase.gsub(/(?:\A|-)(.)/) { |m| m[-1].upcase }
-          klass = Icalendar::Values.const_get klass_name if Icalendar::Values.const_defined?(klass_name)
+          klass_name = "Icalendar::Values::#{klass_name.downcase.gsub(/(?:\A|-)(.)/) { |m| m[-1].upcase }}"
+          klass = Object.const_get klass_name if Object.const_defined?(klass_name)
         end
       end
       klass
@@ -91,6 +107,10 @@ module Icalendar
 
     def strict?
       !!@strict
+    end
+
+    def verbose?
+      @verbose
     end
 
     private
@@ -106,14 +126,14 @@ module Icalendar
           timezone_store.store(component) if klass_name == 'Timezone'
           break
         elsif fields[:name] == 'begin'
-          klass_name = fields[:value].gsub(/\AV/, '').downcase.capitalize
+          klass_name = fields[:value].gsub(/\AV/, '').gsub("-", "_").downcase.capitalize
           Icalendar.logger.debug "Adding component #{klass_name}"
-          if Icalendar.const_defined? klass_name
-            component.add_component parse_component(Icalendar.const_get(klass_name).new)
-          elsif Icalendar::Timezone.const_defined? klass_name
-            component.add_component parse_component(Icalendar::Timezone.const_get(klass_name).new)
+          if Object.const_defined? "Icalendar::#{klass_name}"
+            component.add_component parse_component(Object.const_get("Icalendar::#{klass_name}").new)
+          elsif Object.const_defined? "Icalendar::Timezone::#{klass_name}"
+            component.add_component parse_component(Object.const_get("Icalendar::Timezone::#{klass_name}").new)
           else
-            component.add_component parse_component(Component.new klass_name.downcase, fields[:value])
+            component.add_custom_component klass_name, parse_component(Component.new klass_name.downcase, fields[:value])
           end
         else
           parse_property component, fields

@@ -11,9 +11,10 @@ module Icalendar
     attr_accessor :parent
 
     def self.parse(source)
-      parser = Parser.new(source)
-      parser.component_class = self
-      parser.parse
+      _parse source
+    rescue ArgumentError
+      source.rewind if source.respond_to?(:rewind)
+      _parse Parser.clean_bad_wrapping(source)
     end
 
     def initialize(name, ical_name = nil)
@@ -71,6 +72,8 @@ module Icalendar
       # than 75 octets, but you need to split between characters, not bytes.
       # This is challanging with Unicode composing accents, for example.
 
+      return long_line if long_line.bytesize <= Icalendar::MAX_LINE_LENGTH
+
       chars = long_line.scan(/\P{M}\p{M}*/u) # split in graphenes
       folded = ['']
       bytes = 0
@@ -98,6 +101,14 @@ module Icalendar
         end
       end
       collection.empty? ? nil : collection.join.chomp("\r\n")
+    end
+
+    class << self
+      private def _parse(source)
+        parser = Parser.new(source)
+        parser.component_class = self
+        parser.parse
+      end
     end
   end
 
